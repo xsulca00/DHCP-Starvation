@@ -33,8 +33,12 @@ int main(int argc, char* argv[]) {
 
     int socket {::socket(AF_INET, SOCK_DGRAM, 0)};
     
-    if (ioctl(socket, SIOCGIFMTU, &ifr) == -1) throw system_error{errno, generic_category()}; 
-    cout << "MTU: " << ifr.ifr_mtu << '\n';
+    {
+        ifreq ifrcopy = ifr;
+        if (ioctl(socket, SIOCGIFMTU, &ifrcopy) == -1) throw system_error{errno, generic_category()}; 
+        cout << "MTU: " << ifrcopy.ifr_mtu << '\n';
+    }
+
 
     close(socket);
 }
