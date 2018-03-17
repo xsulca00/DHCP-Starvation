@@ -6,6 +6,7 @@ extern "C" {
 }
 
 #include <iostream>
+#include <iomanip>
 #include <vector>
 #include <string>
 #include <algorithm>
@@ -17,6 +18,17 @@ vector<string> make_args(int argc, char* argv[]) {
     for (int i {0}; i != argc; ++i) args.push_back(argv[i]);
     return args;
 }
+
+void print_mac(const uint8_t* octets) {
+    cout.fill('0');
+    cout << hex << setw(2) << unsigned{octets[0]} << ':'
+              << setw(2) << unsigned{octets[1]} << ':'
+              << setw(2) << unsigned{octets[2]} << ':'
+              << setw(2) << unsigned{octets[3]} << ':'
+              << setw(2) << unsigned{octets[4]} << ':'
+              << setw(2) << unsigned{octets[5]} << '\n';
+}
+
 
 int main(int argc, char* argv[]) {
     vector<string> args {make_args(argc, argv)};
@@ -32,11 +44,14 @@ int main(int argc, char* argv[]) {
     cout << "Interface: " << ifr.ifr_name << '\n';
 
     int socket {::socket(AF_INET, SOCK_DGRAM, 0)};
+
+    // in_pktinfo info {};
     
     {
-        ifreq ifrcopy = ifr;
-        if (ioctl(socket, SIOCGIFMTU, &ifrcopy) == -1) throw system_error{errno, generic_category()}; 
-        cout << "MTU: " << ifrcopy.ifr_mtu << '\n';
+        
+        ifreq ifrcopy {ifr};
+        if (ioctl(socket, SIOCGIFHWADDR, &ifrcopy) == -1) throw system_error{errno, generic_category()}; 
+        print_mac((uint8_t*)ifrcopy.ifr_hwaddr.sa_data);
     }
 
 
