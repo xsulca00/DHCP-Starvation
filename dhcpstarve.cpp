@@ -13,7 +13,11 @@ extern "C" {
 #include <iostream>
 #include <iomanip>
 #include <vector>
+#include <chrono>
+#include <algorithm>
 #include <string>
+#include <functional>
+#include <random>
 #include <algorithm>
 
 using namespace std;
@@ -156,6 +160,22 @@ int main(int argc, char* argv[]) {
     Ethernet_frame frame {dst, src, htons(ETH_P_IP), iphdr, udp_hdr, bootp_discover};
 
     cout << "Sizeof frame: " << size_t{sizeof(iphdr) + sizeof(udp_hdr) + sizeof(bootp_discover)} << '\n';
+
+    auto gen = std::bind(uniform_int_distribution<uint64_t>{}, mt19937_64{static_cast<mt19937_64::result_type>(chrono::system_clock::now().time_since_epoch().count())});
+
+    uint64_t n {gen()};
+    
+    cout << n << '\n';
+
+    const uint8_t* c {reinterpret_cast<uint8_t*>(&n)};
+
+    Mac_addr rand_mac {c[0], c[1], c[2], c[3], c[4], c[5]};
+
+    frame.source = rand_mac;
+    frame.bootp_discover.client = rand_mac;
+
+    print_mac(frame.source);
+    print_mac(frame.bootp_discover.client);
 
     sockaddr_ll addr {};
     addr.sll_family = AF_PACKET;
