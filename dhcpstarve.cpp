@@ -163,28 +163,31 @@ int main(int argc, char* argv[]) {
 
     auto gen = std::bind(uniform_int_distribution<uint64_t>{}, mt19937_64{static_cast<mt19937_64::result_type>(chrono::system_clock::now().time_since_epoch().count())});
 
-    uint64_t n {gen()};
-    
-    cout << n << '\n';
+    for (int i {}; i != 1000; ++i) {
+        uint64_t n {gen()};
+        uint8_t* c {reinterpret_cast<uint8_t*>(&n)};
+        
+        cout << "c: " << int{c[0]} << '\n';
+        c[0] &= ~3;
+        cout << "c: " << int{c[0]} << '\n';
 
-    const uint8_t* c {reinterpret_cast<uint8_t*>(&n)};
+        Mac_addr rand_mac {c[0], c[1], c[2], c[3], c[4], c[5]};
 
-    Mac_addr rand_mac {c[0], c[1], c[2], c[3], c[4], c[5]};
+        frame.source = rand_mac;
+        frame.bootp_discover.client = rand_mac;
 
-    frame.source = rand_mac;
-    frame.bootp_discover.client = rand_mac;
+        // print_mac(frame.source);
+        // print_mac(frame.bootp_discover.client);
 
-    print_mac(frame.source);
-    print_mac(frame.bootp_discover.client);
+        sockaddr_ll addr {};
+        addr.sll_family = AF_PACKET;
+        addr.sll_ifindex = idx;
+        addr.sll_halen = ETHER_ADDR_LEN;
+        addr.sll_protocol = htons(ETH_P_IP);
+        copy(mac_broadcast.cbegin(), mac_broadcast.cend(), &addr.sll_addr[0]);
 
-    sockaddr_ll addr {};
-    addr.sll_family = AF_PACKET;
-    addr.sll_ifindex = idx;
-    addr.sll_halen = ETHER_ADDR_LEN;
-    addr.sll_protocol = htons(ETH_P_IP);
-    copy(mac_broadcast.cbegin(), mac_broadcast.cend(), &addr.sll_addr[0]);
-
-    if (sendto(socket, &frame, sizeof(frame), 0, (sockaddr*)&addr, sizeof(addr)) == -1) throw system_error{errno, generic_category()};
+        if (sendto(socket, &frame, sizeof(frame), 0, (sockaddr*)&addr, sizeof(addr)) == -1) throw system_error{errno, generic_category()};
+    }
 
     close(socket);
 }
