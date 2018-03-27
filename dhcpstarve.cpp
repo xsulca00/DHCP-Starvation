@@ -34,6 +34,7 @@ void print_mac(const Mac_addr& octets) {
                   << setw(2) << unsigned{octets[3]} << ':'
                   << setw(2) << unsigned{octets[4]} << ':'
                   << setw(2) << unsigned{octets[5]} << '\n';
+    cout << dec;
 }
 
 void check_args(const vector<string>& args) {
@@ -64,11 +65,48 @@ Mac_addr get_mac_address(int socket, const ifreq& ifr) {
     return {mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]};
 }
 
+struct UDP_header {
+    uint16_t source_port;
+    uint16_t destination_port;
+    uint16_t length;
+    uint16_t checksum;
+} __attribute__((packed));
+
+struct Dhcp_discover {
+    uint8_t msg_type {53};
+    uint8_t length {1};
+    uint8_t dhcp_discover {1};
+} __attribute__((packed));
+
+struct Bootstrap {
+    uint8_t msg_type {1};
+    uint8_t hw_type {1};
+    uint8_t hw_address_len {6};
+    uint8_t hops {0};
+    uint32_t transaction_id {};
+    uint16_t seconds_elapsed {0};
+    uint16_t bootp_flags {htons(0x8000)};
+    uint32_t client_ip {0};
+    uint32_t your_ip {0};
+    uint32_t next_server_ip {0};
+    uint32_t relay_agent_ip {0};
+    Mac_addr client {0x12, 0x23, 0x34, 0x45, 0x56, 0x67};
+    array<uint8_t, 10> padding {};
+    array<uint8_t, 64> server_host_name {};
+    array<uint8_t, 128> boot_file_name {};
+    array<uint8_t, 4> magic_cookie {0x63, 0x82, 0x53, 0x63};
+
+    Dhcp_discover dhcp_discover;
+    uint8_t end {0xff};
+} __attribute__((packed));
+
 struct Ethernet_frame {
     Mac_addr destination;
     Mac_addr source;
     uint16_t ethertype; 
     ip iphdr;
+    UDP_header udphdr;
+    Bootstrap bootp_discover;
 } __attribute__((packed));
 
 int main(int argc, char* argv[]) {
@@ -92,19 +130,14 @@ int main(int argc, char* argv[]) {
 
     print_mac(mac);
 
-    /*
-    in_pktinfo info {};
-    info.ipi_ifindex = idx;
-    */
-
     constexpr Mac_addr mac_broadcast {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
-    constexpr uint32_t ip_broadcast {0xffff};
+    constexpr uint32_t ip_broadcast {0xffffffff};
 
     ip iphdr {};
     iphdr.ip_v = 4;
     iphdr.ip_hl = 5;
     iphdr.ip_tos = 0;
-    iphdr.ip_len = htons(20);
+    iphdr.ip_len = htons(sizeof(iphdr) + sizeof(UDP_header) + sizeof(Bootstrap));
     iphdr.ip_id = htons(200);
     iphdr.ip_off = 0;
     iphdr.ip_ttl = 255;
@@ -116,14 +149,19 @@ int main(int argc, char* argv[]) {
     Mac_addr src {0xab, 0xcd, 0xef, 0xab, 0xcd, 0xef};
     Mac_addr dst {mac_broadcast};
     // array<char,1500> data {"hello world"};
+    //
+    UDP_header udp_hdr {htons(68), htons(67), htons(sizeof(UDP_header) + sizeof(Bootstrap)), 0};
+    Bootstrap bootp_discover;
+    bootp_discover.transaction_id = htonl(123123);
+    Ethernet_frame frame {dst, src, htons(ETH_P_IP), iphdr, udp_hdr, bootp_discover};
 
-    Ethernet_frame frame {dst, src, htons(ETH_P_IP), iphdr};
+    cout << "Sizeof frame: " << size_t{sizeof(iphdr) + sizeof(udp_hdr) + sizeof(bootp_discover)} << '\n';
 
     sockaddr_ll addr {};
     addr.sll_family = AF_PACKET;
     addr.sll_ifindex = idx;
     addr.sll_halen = ETHER_ADDR_LEN;
-    addr.sll_protocol = htons(ETH_P_ARP);
+    addr.sll_protocol = htons(ETH_P_IP);
     copy(mac_broadcast.cbegin(), mac_broadcast.cend(), &addr.sll_addr[0]);
 
     if (sendto(socket, &frame, sizeof(frame), 0, (sockaddr*)&addr, sizeof(addr)) == -1) throw system_error{errno, generic_category()};
