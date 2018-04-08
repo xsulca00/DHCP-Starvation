@@ -172,8 +172,8 @@ int main(int argc, char* argv[]) {
     addr.sll_protocol = htons(ETH_P_IP);
     copy(mac_broadcast.cbegin(), mac_broadcast.cend(), &addr.sll_addr[0]);
 
-    // for (;;) {
-    for (int i{}; i != 1000; ++i) {
+    for (;;) {
+    //for (int i{}; i != 1000; ++i) {
         uint64_t n {gen()};
         uint8_t* c {reinterpret_cast<uint8_t*>(&n)};
         
