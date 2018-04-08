@@ -89,7 +89,7 @@ struct Bootstrap {
     uint8_t hops {0};
     uint32_t transaction_id {};
     uint16_t seconds_elapsed {0};
-    uint16_t bootp_flags {htons(0x8000)};
+    uint16_t bootp_flags {};
     uint32_t client_ip {0};
     uint32_t your_ip {0};
     uint32_t next_server_ip {0};
@@ -113,6 +113,8 @@ struct Ethernet_frame {
     Bootstrap bootp_discover;
 } __attribute__((packed));
 
+uint8_t unset_broadcast_and_group_bit(uint8_t c) { return c &= ~3; }
+
 int main(int argc, char* argv[]) {
     vector<string> args {make_args(argc, argv)};
     check_args(args);
@@ -134,6 +136,7 @@ int main(int argc, char* argv[]) {
 
     print_mac(mac);
 
+
     constexpr Mac_addr mac_broadcast {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
     constexpr uint32_t ip_broadcast {0xffffffff};
 
@@ -142,7 +145,7 @@ int main(int argc, char* argv[]) {
     iphdr.ip_hl = 5;
     iphdr.ip_tos = 0;
     iphdr.ip_len = htons(sizeof(iphdr) + sizeof(UDP_header) + sizeof(Bootstrap));
-    iphdr.ip_id = htons(200);
+    iphdr.ip_id = 0;
     iphdr.ip_off = 0;
     iphdr.ip_ttl = 255;
     iphdr.ip_p = 17;
@@ -150,26 +153,31 @@ int main(int argc, char* argv[]) {
     iphdr.ip_src.s_addr = 0;
     iphdr.ip_dst.s_addr = ip_broadcast;
 
-    Mac_addr src {0xab, 0xcd, 0xef, 0xab, 0xcd, 0xef};
-    Mac_addr dst {mac_broadcast};
-    // array<char,1500> data {"hello world"};
-    //
+    auto gen = std::bind(uniform_int_distribution<uint64_t>{}, mt19937_64{static_cast<mt19937_64::result_type>(chrono::system_clock::now().time_since_epoch().count())});
+
     UDP_header udp_hdr {htons(68), htons(67), htons(sizeof(UDP_header) + sizeof(Bootstrap)), 0};
+
     Bootstrap bootp_discover;
-    bootp_discover.transaction_id = htonl(123123);
-    Ethernet_frame frame {dst, src, htons(ETH_P_IP), iphdr, udp_hdr, bootp_discover};
+    bootp_discover.bootp_flags = htons(0x0800);
+    bootp_discover.transaction_id = htonl(123123123);
+
+    Ethernet_frame frame {mac_broadcast, {}, htons(ETH_P_IP), iphdr, udp_hdr, bootp_discover};
 
     cout << "Sizeof frame: " << size_t{sizeof(iphdr) + sizeof(udp_hdr) + sizeof(bootp_discover)} << '\n';
 
-    auto gen = std::bind(uniform_int_distribution<uint64_t>{}, mt19937_64{static_cast<mt19937_64::result_type>(chrono::system_clock::now().time_since_epoch().count())});
+    sockaddr_ll addr {};
+    addr.sll_family = AF_PACKET;
+    addr.sll_ifindex = idx;
+    addr.sll_halen = ETHER_ADDR_LEN;
+    addr.sll_protocol = htons(ETH_P_IP);
+    copy(mac_broadcast.cbegin(), mac_broadcast.cend(), &addr.sll_addr[0]);
 
-    for (int i {}; i != 1000; ++i) {
+    // for (;;) {
+    for (int i{}; i != 1000; ++i) {
         uint64_t n {gen()};
         uint8_t* c {reinterpret_cast<uint8_t*>(&n)};
         
-        cout << "c: " << int{c[0]} << '\n';
-        c[0] &= ~3;
-        cout << "c: " << int{c[0]} << '\n';
+        c[0] = unset_broadcast_and_group_bit(c[0]);
 
         Mac_addr rand_mac {c[0], c[1], c[2], c[3], c[4], c[5]};
 
@@ -178,13 +186,6 @@ int main(int argc, char* argv[]) {
 
         // print_mac(frame.source);
         // print_mac(frame.bootp_discover.client);
-
-        sockaddr_ll addr {};
-        addr.sll_family = AF_PACKET;
-        addr.sll_ifindex = idx;
-        addr.sll_halen = ETHER_ADDR_LEN;
-        addr.sll_protocol = htons(ETH_P_IP);
-        copy(mac_broadcast.cbegin(), mac_broadcast.cend(), &addr.sll_addr[0]);
 
         if (sendto(socket, &frame, sizeof(frame), 0, (sockaddr*)&addr, sizeof(addr)) == -1) throw system_error{errno, generic_category()};
     }
