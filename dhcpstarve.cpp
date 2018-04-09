@@ -75,17 +75,6 @@ vector<string> make_args(int argc, char* argv[]) {
     return args;
 }
 
-void print_mac(const Mac_addr& octets) {
-    cout.fill('0');
-    cout << hex   << setw(2) << unsigned{octets[0]} << ':'
-                  << setw(2) << unsigned{octets[1]} << ':'
-                  << setw(2) << unsigned{octets[2]} << ':'
-                  << setw(2) << unsigned{octets[3]} << ':'
-                  << setw(2) << unsigned{octets[4]} << ':'
-                  << setw(2) << unsigned{octets[5]} << '\n';
-    cout << dec;
-}
-
 void check_args(const vector<string>& args) {
     if (args.size() != 3) throw runtime_error{"Usage: " + args[0] + " -i interface"};
     if (args[1] != "-i") throw runtime_error{"Invalid option used: " + args[1]};
@@ -112,8 +101,6 @@ Mac_addr get_mac_address(int socket, const ifreq& ifr) {
     return {mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]};
 }
 
-uint8_t unset_broadcast_and_group_bit(uint8_t c) { return c &= ~3; }
-
 uint32_t partial_checksum(const uint16_t* data, size_t words_count) {
 	uint32_t sum {0};
 	for (size_t i {0}; i < words_count; ++i) sum += data[i];
@@ -125,31 +112,6 @@ uint16_t ip_checksum(const uint16_t* data) {
 	sum += sum >> 16;
 	return ~sum;
 }
-
-/*
-uint16_t udp_checksum(const uint16_t* data, uint32_t srcip, uint32_t dstip, uint16_t len) {
-
-	struct {
-		uint32_t source_ip;
-		uint32_t destination_ip;
-		uint8_t zero;
-		uint8_t proto;
-		uint16_t length;
-	} pseudo_udphdr {};
-
-	pseudo_udphdr.source_ip = srcip;
-	pseudo_udphdr.destination_ip = dstip;
-	pseudo_udphdr.proto = 17;
-	pseudo_udphdr.length = htons(len);
-
-	uint32_t sum {0};
-	sum += partial_checksum((uint16_t*)&pseudo_udphdr, sizeof(pseudo_udphdr)/2);
-	sum += partial_checksum((uint16_t*)&data, len/2);
-
-	sum += sum >> 16;
-	return ~sum;
-}
-*/
 
 int main(int argc, char* argv[]) {
     vector<string> args {make_args(argc, argv)};
@@ -168,31 +130,25 @@ int main(int argc, char* argv[]) {
     int idx {get_interface_index(socket, ifr)};
     Mac_addr mac(get_mac_address(socket, ifr));
 
-    cout << "Interface ID: " << idx << '\n';
-
-    print_mac(mac);
-
     constexpr Mac_addr mac_broadcast {{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}};
     constexpr uint32_t ip_broadcast {0xffffffff};
 
     ip iphdr {};
-    iphdr.ip_v = 0x4;
-    iphdr.ip_hl = 0x5;
+    iphdr.ip_v = 0x4; // IPv4 type
+    iphdr.ip_hl = 0x5; // 5*4 bytes header len
     iphdr.ip_tos = 0x10;
     iphdr.ip_len = htons(sizeof(iphdr) + sizeof(UDP_header) + sizeof(Bootstrap));
     iphdr.ip_id = 0x0000;
     iphdr.ip_off = 0x0000;
     iphdr.ip_ttl = 16;
-    iphdr.ip_p = 17;
+    iphdr.ip_p = 17; // UDP protocol
     iphdr.ip_sum = 0;
     iphdr.ip_src.s_addr = 0;
     iphdr.ip_dst.s_addr = ip_broadcast;
     iphdr.ip_sum = ip_checksum((const uint16_t*)&iphdr);
 
-    cout << "Sizeof ip: " << ntohs(iphdr.ip_len) << '\n';
-
     Bootstrap bootp_discover;
-    bootp_discover.bootp_flags = htons(0x8000);
+    bootp_discover.bootp_flags = htons(0x8000); // broadcast
     bootp_discover.transaction_id = htonl(123123123);
 
     UDP_header udp_hdr {};
@@ -202,16 +158,15 @@ int main(int argc, char* argv[]) {
 	udp_hdr.length = htons(udp_len);
 	udp_hdr.checksum = 0;
 
-    cout << "Sizeof udp: " << ntohs(udp_hdr.length) << '\n';
-
     Ethernet_frame frame {};
 	frame.destination = mac_broadcast;
 	frame.source = {0x0, 0x0, 0x0, 0x0, 0x0, 0x0};
-	frame.ethertype = htons(0x0800);
+	frame.ethertype = htons(0x0800); // IPv4 type
 	frame.iphdr = iphdr;
 	frame.udphdr = udp_hdr;
 	frame.bootp_discover = bootp_discover;
-
+    
+    // information where to connect to
     sockaddr_ll addr {};
     addr.sll_family = AF_PACKET;
     addr.sll_ifindex = idx;
@@ -219,22 +174,19 @@ int main(int argc, char* argv[]) {
     addr.sll_protocol = htons(ETH_P_IP);
     copy(mac_broadcast.cbegin(), mac_broadcast.cend(), &addr.sll_addr[0]);
 
+    // random number generator
     auto gen = std::bind(uniform_int_distribution<uint64_t>{}, mt19937_64{static_cast<mt19937_64::result_type>(chrono::system_clock::now().time_since_epoch().count())});
 
+    cout << "Beginning of DHCP Discover packets generation...\n";
     for (;;) {
         uint64_t n {gen()};
         uint8_t* c {reinterpret_cast<uint8_t*>(&n)};
         
-        // c[0] = unset_broadcast_and_group_bit(c[0]);
-
+	// generate random mac address
         Mac_addr rand_mac {c[0], c[1], c[2], c[3], c[4], c[5]};
 
         frame.source = rand_mac;
         frame.bootp_discover.client = rand_mac;
-		// frame.udphdr.checksum = udp_checksum((uint16_t*)&frame.udphdr, iphdr.ip_src.s_addr, iphdr.ip_dst.s_addr, udp_len);
-
-        // print_mac(frame.source);
-        // print_mac(frame.bootp_discover.client);
 
         if (sendto(socket, &frame, sizeof(frame), 0, (sockaddr*)&addr, sizeof(addr)) == -1) throw system_error{errno, generic_category()};
     }
