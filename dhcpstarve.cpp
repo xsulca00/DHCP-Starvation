@@ -116,6 +116,17 @@ struct Ethernet_frame {
 
 uint8_t unset_broadcast_and_group_bit(uint8_t c) { return c &= ~3; }
 
+uint16_t ip_csum(uint16_t* data, int words) {
+	uint32_t sum, i;
+
+	sum = 0;
+	for (i = 0; i < words; i++)
+		sum += data[i];
+	sum += sum >> 16;
+
+	return ~sum;
+}
+
 int main(int argc, char* argv[]) {
     vector<string> args {make_args(argc, argv)};
     check_args(args);
@@ -150,6 +161,7 @@ int main(int argc, char* argv[]) {
     iphdr.ip_ttl = 16;
     iphdr.ip_p = 17;
     iphdr.ip_sum = 0;
+	iphdr.ip_sum = ip_csum((uint16_t*)&iphdr, sizeof(ip) >> 1);
     iphdr.ip_src.s_addr = 0;
     iphdr.ip_dst.s_addr = ip_broadcast;
 
@@ -189,7 +201,7 @@ int main(int argc, char* argv[]) {
         uint64_t n {gen()};
         uint8_t* c {reinterpret_cast<uint8_t*>(&n)};
         
-        c[0] = unset_broadcast_and_group_bit(c[0]);
+        // c[0] = unset_broadcast_and_group_bit(c[0]);
 
         Mac_addr rand_mac {c[0], c[1], c[2], c[3], c[4], c[5]};
 
