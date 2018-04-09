@@ -17,6 +17,7 @@ extern "C" {
 #include <algorithm>
 #include <string>
 #include <functional>
+#include <system_error>
 #include <random>
 #include <algorithm>
 
@@ -53,13 +54,13 @@ int create_socket() {
 }
 
 int get_interface_index(int socket, const ifreq& ifr) {
-    ifreq ifrcopy {ifr};
+    ifreq ifrcopy(ifr);
     if (ioctl(socket, SIOCGIFINDEX, &ifrcopy) == -1) throw system_error{errno, generic_category()};
     return ifrcopy.ifr_ifindex;
 }
 
 Mac_addr get_mac_address(int socket, const ifreq& ifr) {
-    ifreq ifrcopy {ifr};
+    ifreq ifrcopy(ifr);
     if (ioctl(socket, SIOCGIFHWADDR, &ifrcopy) == -1) throw system_error{errno, generic_category()}; 
 
     const uint8_t* mac {reinterpret_cast<uint8_t*>(&ifrcopy.ifr_hwaddr.sa_data[0])};
@@ -77,7 +78,7 @@ struct UDP_header {
 } __attribute__((packed));
 
 struct Dhcp_discover {
-    uint8_t msg_type {53};
+    uint8_t msg_type {0x35};
     uint8_t length {1};
     uint8_t dhcp_discover {1};
 } __attribute__((packed));
@@ -94,11 +95,11 @@ struct Bootstrap {
     uint32_t your_ip {0};
     uint32_t next_server_ip {0};
     uint32_t relay_agent_ip {0};
-    Mac_addr client {0x12, 0x23, 0x34, 0x45, 0x56, 0x67};
+    Mac_addr client {{}};
     array<uint8_t, 10> padding {};
     array<uint8_t, 64> server_host_name {};
     array<uint8_t, 128> boot_file_name {};
-    array<uint8_t, 4> magic_cookie {0x63, 0x82, 0x53, 0x63};
+    array<uint8_t, 4> magic_cookie {{0x63, 0x82, 0x53, 0x63}};
 
     Dhcp_discover dhcp_discover;
     uint8_t end {0xff};
@@ -130,40 +131,51 @@ int main(int argc, char* argv[]) {
 
     int socket {create_socket()};
     int idx {get_interface_index(socket, ifr)};
-    Mac_addr mac {get_mac_address(socket, ifr)};
+    Mac_addr mac(get_mac_address(socket, ifr));
 
     cout << "Interface ID: " << idx << '\n';
 
     print_mac(mac);
 
-
-    constexpr Mac_addr mac_broadcast {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+    constexpr Mac_addr mac_broadcast {{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}};
     constexpr uint32_t ip_broadcast {0xffffffff};
 
     ip iphdr {};
-    iphdr.ip_v = 4;
-    iphdr.ip_hl = 5;
-    iphdr.ip_tos = 0;
+    iphdr.ip_v = 0x4;
+    iphdr.ip_hl = 0x5;
+    iphdr.ip_tos = 0x10;
     iphdr.ip_len = htons(sizeof(iphdr) + sizeof(UDP_header) + sizeof(Bootstrap));
-    iphdr.ip_id = 0;
-    iphdr.ip_off = 0;
-    iphdr.ip_ttl = 255;
+    iphdr.ip_id = 0x0000;
+    iphdr.ip_off = 0x0000;
+    iphdr.ip_ttl = 16;
     iphdr.ip_p = 17;
     iphdr.ip_sum = 0;
     iphdr.ip_src.s_addr = 0;
     iphdr.ip_dst.s_addr = ip_broadcast;
 
+    cout << "Sizeof ip: " << ntohs(iphdr.ip_len) << '\n';
+
     auto gen = std::bind(uniform_int_distribution<uint64_t>{}, mt19937_64{static_cast<mt19937_64::result_type>(chrono::system_clock::now().time_since_epoch().count())});
 
-    UDP_header udp_hdr {htons(68), htons(67), htons(sizeof(UDP_header) + sizeof(Bootstrap)), 0};
+    UDP_header udp_hdr {};
+	udp_hdr.source_port = htons(68);
+	udp_hdr.destination_port = htons(67);
+	udp_hdr.length = htons(sizeof(UDP_header) + sizeof(Bootstrap));
+	udp_hdr.checksum = 0;
+
+    cout << "Sizeof udp: " << ntohs(udp_hdr.length) << '\n';
 
     Bootstrap bootp_discover;
-    bootp_discover.bootp_flags = htons(0x0800);
+    bootp_discover.bootp_flags = htons(0x8000);
     bootp_discover.transaction_id = htonl(123123123);
 
-    Ethernet_frame frame {mac_broadcast, {}, htons(ETH_P_IP), iphdr, udp_hdr, bootp_discover};
-
-    cout << "Sizeof frame: " << size_t{sizeof(iphdr) + sizeof(udp_hdr) + sizeof(bootp_discover)} << '\n';
+    Ethernet_frame frame {};
+	frame.destination = mac_broadcast;
+	frame.source = {0x0, 0x0, 0x0, 0x0, 0x0, 0x0};
+	frame.ethertype = htons(0x0800);
+	frame.iphdr = iphdr;
+	frame.udphdr = udp_hdr;
+	frame.bootp_discover = bootp_discover;
 
     sockaddr_ll addr {};
     addr.sll_family = AF_PACKET;
